@@ -290,7 +290,8 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 "acres_burned": _to_float(_first(props, "AcresBurned", "AcresBurnedDisplay")),
                 "percent_contained": _to_float(
                     _first(props, "PercentContained", "PercentContainedDisplay")
-                ),
+                )
+                or 0.0,
                 "county": _first(props, "County", "CountiesList"),
                 "admin_unit": props.get("AdminUnit"),
                 "incident_type": _first(
