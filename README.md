@@ -15,6 +15,35 @@ When a fire drops out of the feed (contained/closed and removed by CAL FIRE),
 its entity becomes `unavailable` rather than disappearing, so history sticks
 around in the recorder/history graphs.
 
+## Getting notified about new fires
+
+Whenever a genuinely new incident appears in the feed (not ones already
+active when Home Assistant started), the integration fires a
+`calfire_new_incident` event with the fire's details. Use it in an
+automation like this:
+
+```yaml
+alias: New CAL FIRE incident notification
+trigger:
+  - platform: event
+    event_type: calfire_new_incident
+condition: []
+action:
+  - service: notify.mobile_app_YOUR_PHONE
+    data:
+      title: "New wildfire: {{ trigger.event.data.name }}"
+      message: >
+        {{ trigger.event.data.county }} county,
+        {{ trigger.event.data.acres_burned }} acres,
+        {{ trigger.event.data.percent_contained }}% contained.
+      data:
+        url: "{{ trigger.event.data.url }}"
+```
+
+Available fields on `trigger.event.data`: `unique_id`, `name`, `county`,
+`admin_unit`, `incident_type`, `acres_burned`, `percent_contained`,
+`distance_km`, `url`, `latitude`, `longitude`.
+
 ## Installation via HACS (recommended once this is on GitHub)
 
 1. Push this folder to a GitHub repo (see "Publishing to GitHub" below).
@@ -38,12 +67,12 @@ around in the recorder/history graphs.
 
 HACS installs from a GitHub repository, so:
 
-1. Replace `YOUR_GITHUB_USERNAME` in `custom_components/calfire/manifest.json`
+1. Replace `carlkhenderson` in `custom_components/calfire/manifest.json`
    and `LICENSE` with your actual details.
 2. Create a new **public** repo on GitHub, e.g. `ha-calfire`.
 3. From this folder:
    ```bash
-   git remote add origin https://github.com/YOUR_GITHUB_USERNAME/ha-calfire.git
+   git remote add origin https://github.com/carlkhenderson/ha-calfire.git
    git branch -M main
    git push -u origin main
    ```
