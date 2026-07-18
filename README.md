@@ -158,6 +158,52 @@ window.** Check, in order:
 2. Debug logs (same setup as above) for lines like `missing from feed
    (x/y consecutive polls)`, which show the actual countdown in progress.
 
+## Dashboard: list of active fires by distance
+
+Since fire entities are created and removed dynamically, a normal
+Lovelace **Entities** card (which needs a fixed list of entity IDs written
+into its config) won't stay up to date on its own. Instead, use a
+**Markdown card** with a small template that looks up all current
+`calfire` entities at render time and sorts them by `distance_km`:
+
+```yaml
+type: markdown
+title: Active CAL FIRE Incidents
+content: >
+  {% set entity_ids = integration_entities('calfire')
+       | reject('eq', 'sensor.calfire_latest_incident') | list %}
+  {% set ns = namespace(rows=[]) %}
+  {% for eid in entity_ids %}
+    {% set st = states[eid] %}
+    {% if st is not none and st.state not in ['unavailable', 'unknown']
+          and st.attributes.distance_km is not none %}
+      {% set ns.rows = ns.rows + [st] %}
+    {% endif %}
+  {% endfor %}
+  {% set sorted_rows = ns.rows | sort(attribute='attributes.distance_km') %}
+  {% if sorted_rows | length == 0 %}
+  No active fires currently tracked.
+  {% else %}
+  | Fire | Distance | Acres | Contained | County |
+  | --- | --- | --- | --- | --- |
+  {% for st in sorted_rows %}
+  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance_km }} km | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.county }} |
+  {% endfor %}
+  {% endif %}
+```
+
+Add it via **Edit Dashboard → Add Card → Manual**, paste the YAML above,
+and save. It updates automatically as fires appear, disappear, and move
+in distance-sorted order — no manual entity list to maintain.
+
+If you'd rather have real entity rows (with more-info popups, icons, tap
+actions, etc.) instead of a markdown table, the community
+[auto-entities](https://github.com/thomasloven/lovelace-auto-entities)
+custom card (installable via HACS as a *frontend* repository, separate
+from this integration) supports the same "filter by integration, sort by
+attribute" idea natively — worth a look if the table above feels too
+plain, but it's an extra dependency this integration doesn't require.
+
 ## Notes
 
 - The feed only includes fires CAL FIRE currently tracks (roughly 10+ acre
