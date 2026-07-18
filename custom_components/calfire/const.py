@@ -18,6 +18,11 @@ API_URL = "https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?ina
 # form in config_flow.py collects, and what __init__.py reads back out.
 CONF_RADIUS_KM = "radius_km"
 CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
+# Optional override for the radius filter's center point. If either is left
+# unset, the coordinator falls back to Home Assistant's configured home
+# location (Settings -> System -> General).
+CONF_CENTER_LATITUDE = "center_latitude"
+CONF_CENTER_LONGITUDE = "center_longitude"
 
 # Default values offered in the setup form if the user doesn't change them.
 DEFAULT_RADIUS_KM = 0  # 0 = no distance filtering, show all incidents statewide

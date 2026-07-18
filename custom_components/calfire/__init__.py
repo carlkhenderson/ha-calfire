@@ -29,6 +29,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     API_URL,
+    CONF_CENTER_LATITUDE,
+    CONF_CENTER_LONGITUDE,
     CONF_RADIUS_KM,
     CONF_SCAN_INTERVAL_MINUTES,
     DEFAULT_RADIUS_KM,
@@ -124,16 +126,25 @@ class CalFireCoordinator(DataUpdateCoordinator):
     Entities in sensor.py read from `self.data` (via `coordinator.data`).
     """
 
-    def __init__(self, hass: HomeAssistant, radius_km: float, scan_minutes: int) -> None:
-        # Optional filter: if > 0, incidents farther than this from home are
-        # dropped entirely (never become entities). 0 means "no filtering".
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        radius_km: float,
+        scan_minutes: int,
+        center_lat: float | None = None,
+        center_lon: float | None = None,
+    ) -> None:
+        # Optional filter: if > 0, incidents farther than this from the
+        # center point are dropped entirely (never become entities). 0
+        # means "no filtering".
         self.radius_km = radius_km
 
-        # Your Home Assistant instance's configured location (Settings ->
-        # System -> General), used as the center point for radius filtering
-        # and for each incident's "distance_km" attribute.
-        self.home_lat = hass.config.latitude
-        self.home_lon = hass.config.longitude
+        # The center point used for both the radius filter and each
+        # incident's "distance_km" attribute. Defaults to Home Assistant's
+        # configured home location (Settings -> System -> General) unless
+        # the user set an explicit override in the setup/options form.
+        self.center_lat = center_lat if center_lat is not None else hass.config.latitude
+        self.center_lon = center_lon if center_lon is not None else hass.config.longitude
 
         # Home Assistant provides a shared aiohttp session per-instance so
         # we're not opening a fresh TCP connection for every poll.
@@ -237,12 +248,12 @@ class CalFireCoordinator(DataUpdateCoordinator):
             if not unique_id:
                 continue  # can't build an entity without something to key it on
 
-            # Work out how far this fire is from your HA instance's home
-            # location, so it can be exposed as an attribute and used for
-            # the optional radius filter below.
+            # Work out how far this fire is from the configured center
+            # point, so it can be exposed as an attribute and used for the
+            # optional radius filter below.
             distance_km = None
             if lat is not None and lon is not None:
-                distance_km = _haversine_km(self.home_lat, self.home_lon, lat, lon)
+                distance_km = _haversine_km(self.center_lat, self.center_lon, lat, lon)
 
             # If a radius filter is configured (radius_km > 0) and this
             # fire is farther away than that, skip it entirely — it never
@@ -336,13 +347,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Called by Home Assistant when this integration is added/started.
 
     `entry` represents one instance of the integration as configured via
-    the UI (see config_flow.py) — its `.data` dict holds whatever the user
-    submitted in the setup form (radius, scan interval).
+    the UI (see config_flow.py). Two sources of settings get merged here:
+    `entry.data` (whatever was submitted in the initial setup form) and
+    `entry.options` (whatever was later changed via the "Configure" gear
+    icon / options flow). Options take precedence, since they represent
+    the most recent choice.
     """
-    radius_km = entry.data.get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)
-    scan_minutes = entry.data.get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES)
 
-    coordinator = CalFireCoordinator(hass, radius_km, scan_minutes)
+    def _get(key: str, default):
+        return entry.options.get(key, entry.data.get(key, default))
+
+    radius_km = _get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)
+    scan_minutes = _get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES)
+    center_lat = _get(CONF_CENTER_LATITUDE, None)
+    center_lon = _get(CONF_CENTER_LONGITUDE, None)
+
+    coordinator = CalFireCoordinator(hass, radius_km, scan_minutes, center_lat, center_lon)
 
     # Do one fetch right now (rather than waiting for the first timer tick)
     # so entities have real data as soon as setup finishes. If this fails,
@@ -360,7 +380,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # (just "sensor" for us) — this is what actually triggers sensor.py's
     # `async_setup_entry` to run and create entities.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # If the user later changes settings via the options flow
+    # (config_flow.py's CalFireOptionsFlow), `entry.options` changes but
+    # nothing else happens automatically — the coordinator above was built
+    # with a snapshot of the old settings. Reloading the whole config entry
+    # re-runs this function from scratch with the new values, which is the
+    # simplest way to make radius/scan-interval/center-point changes take
+    # effect immediately rather than requiring a manual HA restart.
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_update))
+
     return True
+
+
+async def _async_reload_on_options_update(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload this config entry whenever its options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
