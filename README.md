@@ -141,12 +141,27 @@ HACS installs from a GitHub repository, so:
    pushing to confirm both pass (HACS requires this for a repo to be
    addable, and it catches manifest/structure mistakes early).
 4. Optionally set:
-   - **Radius (km)**: only show fires within this distance of your HA home
-     location. Leave at `0` for all active incidents statewide.
+   - **Radius (km)**: only show fires within this distance of the center
+     point below. Leave at `0` for all active incidents statewide.
    - **Scan interval (minutes)**: how often to poll the feed. CAL FIRE
      doesn't update the underlying data much faster than every 15–30 min
      during an active incident, so the default of 10 minutes is reasonable;
      you don't need to go much lower.
+   - **Center latitude / longitude**: leave both blank to use your Home
+     Assistant instance's configured home location (Settings -> System ->
+     General) as the center for the radius filter and each fire's
+     `distance_km` attribute. Set both to center on somewhere else instead
+     — useful if your HA server isn't physically where you actually want
+     "nearby" measured from (a vacation property, a family member's house,
+     etc).
+
+## Changing settings later
+
+All of the above — radius, scan interval, and center point — can be
+changed after setup without removing the integration: go to **Settings ->
+Devices & Services**, find "CAL FIRE Incidents", and click **Configure**.
+Changes take effect immediately; the integration reloads itself
+automatically rather than requiring a Home Assistant restart.
 
 ## Notes / things you may want to tweak
 
