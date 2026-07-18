@@ -18,17 +18,44 @@ async def async_setup_entry(
     known_ids: set[str] = set()
 
     @callback
-    def _add_new_entities() -> None:
+    def _initial_load() -> None:
+        # Populate entities for whatever is already in the feed at startup,
+        # without firing "new incident" events for fires that were already active.
+        entities = []
+        for unique_id in coordinator.data:
+            known_ids.add(unique_id)
+            entities.append(CalFireIncidentSensor(coordinator, unique_id))
+        if entities:
+            async_add_entities(entities)
+
+    @callback
+    def _handle_update() -> None:
         new_entities = []
         for unique_id, incident in coordinator.data.items():
             if unique_id not in known_ids:
                 known_ids.add(unique_id)
                 new_entities.append(CalFireIncidentSensor(coordinator, unique_id))
+                hass.bus.async_fire(
+                    "calfire_new_incident",
+                    {
+                        "unique_id": unique_id,
+                        "name": incident["name"],
+                        "county": incident["county"],
+                        "admin_unit": incident["admin_unit"],
+                        "incident_type": incident["incident_type"],
+                        "acres_burned": incident["acres_burned"],
+                        "percent_contained": incident["percent_contained"],
+                        "distance_km": incident["distance_km"],
+                        "url": incident["url"],
+                        "latitude": incident["latitude"],
+                        "longitude": incident["longitude"],
+                    },
+                )
         if new_entities:
             async_add_entities(new_entities)
 
-    _add_new_entities()
-    entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
+    _initial_load()
+    entry.async_on_unload(coordinator.async_add_listener(_handle_update))
 
 
 class CalFireIncidentSensor(CoordinatorEntity, SensorEntity):
@@ -36,6 +63,7 @@ class CalFireIncidentSensor(CoordinatorEntity, SensorEntity):
 
     _attr_icon = "mdi:fire"
     _attr_native_unit_of_measurement = "acres"
+
     def __init__(self, coordinator, unique_id: str) -> None:
         super().__init__(coordinator)
         self._incident_id = unique_id
