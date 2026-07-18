@@ -17,6 +17,8 @@ etc.) rather than fetching anything themselves.
 """
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -25,6 +27,8 @@ from homeassistant.helpers.entity_registry import async_get as async_get_entity_
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -66,54 +70,78 @@ async def async_setup_entry(
         # `_async_update_data` and contains only fires that weren't present
         # on the previous poll (and is empty on the very first poll, so we
         # don't treat pre-existing fires as "new").
-        new_entities = []
-        for unique_id, incident in coordinator.newly_added.items():
-            if unique_id not in known_ids:
-                known_ids.add(unique_id)
-                new_entities.append(CalFireIncidentSensor(coordinator, unique_id))
+        #
+        # This whole section is wrapped in try/except so that an
+        # unexpected problem here (e.g. a missing dict key) can't silently
+        # prevent the *removal* section below from ever running — the two
+        # are independent and a bug in one shouldn't block the other.
+        try:
+            new_entities = []
+            for unique_id, incident in coordinator.newly_added.items():
+                if unique_id not in known_ids:
+                    known_ids.add(unique_id)
+                    new_entities.append(CalFireIncidentSensor(coordinator, unique_id))
 
-                # Fire a Home Assistant event carrying this fire's details.
-                # Automations can trigger on event_type "calfire_new_incident"
-                # as an alternative to watching sensor.calfire_latest_incident.
-                hass.bus.async_fire(
-                    "calfire_new_incident",
-                    {
-                        "unique_id": unique_id,
-                        "name": incident["name"],
-                        "county": incident["county"],
-                        "admin_unit": incident["admin_unit"],
-                        "incident_type": incident["incident_type"],
-                        "acres_burned": incident["acres_burned"],
-                        "percent_contained": incident["percent_contained"],
-                        "distance_km": incident["distance_km"],
-                        "url": incident["url"],
-                        "latitude": incident["latitude"],
-                        "longitude": incident["longitude"],
-                    },
-                )
-        if new_entities:
-            async_add_entities(new_entities)
+                    # Fire a Home Assistant event carrying this fire's
+                    # details. Automations can trigger on event_type
+                    # "calfire_new_incident" as an alternative to watching
+                    # sensor.calfire_latest_incident.
+                    hass.bus.async_fire(
+                        "calfire_new_incident",
+                        {
+                            "unique_id": unique_id,
+                            "name": incident["name"],
+                            "county": incident["county"],
+                            "admin_unit": incident["admin_unit"],
+                            "incident_type": incident["incident_type"],
+                            "acres_burned": incident["acres_burned"],
+                            "percent_contained": incident["percent_contained"],
+                            "distance_km": incident["distance_km"],
+                            "url": incident["url"],
+                            "latitude": incident["latitude"],
+                            "longitude": incident["longitude"],
+                        },
+                    )
+            if new_entities:
+                async_add_entities(new_entities)
+        except Exception:  # noqa: BLE001 - see comment above: must not
+            # propagate and block the removal section below.
+            _LOGGER.exception("Error while adding entities for new CAL FIRE incidents")
 
         # --- Remove entities for fires the coordinator has confirmed are gone ---
         # `coordinator.removed_ids` only contains fires that have been
         # missing from the feed for several consecutive polls in a row (see
         # MISSING_POLLS_BEFORE_REMOVAL in const.py) — not just a single
         # missed poll, which could be a transient API hiccup.
-        if coordinator.removed_ids:
-            # The entity registry is Home Assistant's persistent database
-            # of every entity that's ever been created (entity_id <->
-            # unique_id mappings, custom names, etc). We use it here to
-            # look up the entity_id for a unique_id, then delete it —
-            # actually removing the entity from Home Assistant entirely,
-            # rather than just leaving it stuck in an "unavailable" state.
-            ent_reg = async_get_entity_registry(hass)
-            for unique_id in coordinator.removed_ids:
-                known_ids.discard(unique_id)
-                entity_id = ent_reg.async_get_entity_id(
-                    "sensor", DOMAIN, f"calfire_{unique_id}"
-                )
-                if entity_id:
-                    ent_reg.async_remove(entity_id)
+        try:
+            if coordinator.removed_ids:
+                # The entity registry is Home Assistant's persistent
+                # database of every entity that's ever been created
+                # (entity_id <-> unique_id mappings, custom names, etc). We
+                # use it here to look up the entity_id for a unique_id,
+                # then delete it — actually removing the entity from Home
+                # Assistant entirely, rather than just leaving it stuck in
+                # an "unavailable" state.
+                ent_reg = async_get_entity_registry(hass)
+                for unique_id in coordinator.removed_ids:
+                    known_ids.discard(unique_id)
+                    entity_id = ent_reg.async_get_entity_id(
+                        "sensor", DOMAIN, f"calfire_{unique_id}"
+                    )
+                    if entity_id:
+                        _LOGGER.debug(
+                            "Removing entity %s (fire no longer in feed)", entity_id
+                        )
+                        ent_reg.async_remove(entity_id)
+                    else:
+                        _LOGGER.warning(
+                            "Could not find a registered entity for calfire_%s to remove",
+                            unique_id,
+                        )
+        except Exception:  # noqa: BLE001 - log instead of silently losing
+            # track of a removal; the next poll will retry since
+            # `coordinator.removed_ids` is recomputed fresh each time.
+            _LOGGER.exception("Error while removing entities for closed CAL FIRE incidents")
 
     # Subscribe `_handle_update` to run after every coordinator refresh.
     # `entry.async_on_unload(...)` registers the returned "unsubscribe"

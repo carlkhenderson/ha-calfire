@@ -25,6 +25,10 @@ import async_timeout
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.entity_registry import (
+    async_entries_for_config_entry,
+    async_get as async_get_entity_registry,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -186,6 +190,21 @@ class CalFireCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(minutes=scan_minutes),
         )
 
+    def seed_known_ids(self, ids: set[str]) -> None:
+        """Add IDs that should be treated as 'previously known' fires.
+
+        Called once at startup with fire IDs found already registered as
+        entities from a prior Home Assistant session (see
+        `async_setup_entry` below). Without this, a fire entity left over
+        from before a restart or integration reload — for a fire that's
+        since disappeared from the feed — would never be evaluated for
+        removal at all: this coordinator would have no record of ever
+        having "known" about it, so it could never be recognized as
+        missing. It would simply sit in Home Assistant forever, stuck
+        `unavailable`.
+        """
+        self._known_ids |= ids
+
     async def _async_update_data(self):
         """Fetch the feed and return a dict of {unique_id: incident dict}.
 
@@ -327,8 +346,15 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 continue
             count = self._missing_counts.get(uid, 0) + 1
             self._missing_counts[uid] = count
+            _LOGGER.debug(
+                "Incident %s missing from feed (%s/%s consecutive polls)",
+                uid,
+                count,
+                MISSING_POLLS_BEFORE_REMOVAL,
+            )
             if count >= MISSING_POLLS_BEFORE_REMOVAL:
                 removed_ids.add(uid)
+                _LOGGER.debug("Incident %s confirmed gone; entity will be removed", uid)
         for uid in removed_ids:
             # No longer need to track these — they've been confirmed gone.
             self._missing_counts.pop(uid, None)
@@ -363,6 +389,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     center_lon = _get(CONF_CENTER_LONGITUDE, None)
 
     coordinator = CalFireCoordinator(hass, radius_km, scan_minutes, center_lat, center_lon)
+
+    # If this integration was previously set up (and is now reloading, or
+    # Home Assistant just restarted), there may already be per-fire
+    # entities sitting in the registry from before. Find them and seed the
+    # coordinator's tracking with their fire IDs *before* the first fetch,
+    # so leftover entities for fires that closed out while HA was down get
+    # properly evaluated for removal instead of being invisible to that
+    # logic forever (see `seed_known_ids`'s docstring for why this matters).
+    unique_id_prefix = f"{DOMAIN}_"
+    latest_incident_suffix = "_latest_incident"
+    ent_reg = async_get_entity_registry(hass)
+    leftover_fire_ids = {
+        registry_entry.unique_id[len(unique_id_prefix) :]
+        for registry_entry in async_entries_for_config_entry(ent_reg, entry.entry_id)
+        if registry_entry.domain == "sensor"
+        and registry_entry.unique_id.startswith(unique_id_prefix)
+        and not registry_entry.unique_id.endswith(latest_incident_suffix)
+    }
+    coordinator.seed_known_ids(leftover_fire_ids)
 
     # Do one fetch right now (rather than waiting for the first timer tick)
     # so entities have real data as soon as setup finishes. If this fails,
