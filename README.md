@@ -11,23 +11,65 @@ radius filter is set). Because latitude/longitude are exposed as attributes,
 these entities also show up on the built-in Lovelace **Map** card.
 
 New fires get their own entity automatically as they appear in the feed.
-When a fire drops out of the feed (contained/closed and removed by CAL FIRE),
-its entity becomes `unavailable` rather than disappearing, so history sticks
-around in the recorder/history graphs.
+When a fire drops out of the feed (contained/closed and removed by CAL
+FIRE), its entity is removed from Home Assistant entirely — but only after
+it's been missing from the feed for **2 consecutive polls in a row**
+(`MISSING_POLLS_BEFORE_REMOVAL` in `const.py`), so a brief CAL FIRE API
+hiccup doesn't delete an entity for a fire that's actually still burning.
+Before that threshold is hit, the entity is marked `unavailable` rather
+than removed. Recorder history for a removed entity isn't deleted — it's
+just no longer surfaced as a live entity, so your entity list stays clean
+instead of accumulating dead fires forever.
 
 ## Getting notified about new fires
 
-Whenever a genuinely new incident appears in the feed (not ones already
-active when Home Assistant started), the integration fires a
-`calfire_new_incident` event with the fire's details. Use it in an
-automation like this:
+There's a dedicated entity for this: **`sensor.calfire_latest_incident`**.
+Its state is always the name of whichever fire was most recently detected
+in the feed (starting as `None` until the first new fire shows up after HA
+starts). Attributes carry the same detail as the per-fire sensors: county,
+acres, containment, URL, lat/lon, etc.
+
+Point an automation's `state` trigger at it — no event filtering needed:
 
 ```yaml
 alias: New CAL FIRE incident notification
 trigger:
+  - platform: state
+    entity_id: sensor.calfire_latest_incident
+condition:
+  - condition: template
+    value_template: "{{ trigger.to_state.state != 'None' }}"
+action:
+  - service: notify.mobile_app_YOUR_PHONE
+    data:
+      title: "New wildfire: {{ trigger.to_state.state }}"
+      message: >
+        {{ trigger.to_state.attributes.county }} county,
+        {{ trigger.to_state.attributes.acres_burned }} acres,
+        {{ trigger.to_state.attributes.percent_contained }}% contained.
+      data:
+        url: "{{ trigger.to_state.attributes.url }}"
+```
+
+The `condition` just guards against the very first state ever recorded
+(`None`) firing a bogus notification — every change after that is a real
+new fire.
+
+If more than one fire appears in the same poll cycle, this entity surfaces
+whichever has burned the most acres; the others are still tracked as their
+own per-fire entities, so nothing is lost, just not reflected here.
+
+### Alternative: a custom event
+
+The integration also fires a `calfire_new_incident` event for *every* new
+fire (not just the single most-recent one), if you'd rather trigger off
+that instead:
+
+```yaml
+alias: New CAL FIRE incident notification (event-based)
+trigger:
   - platform: event
     event_type: calfire_new_incident
-condition: []
 action:
   - service: notify.mobile_app_YOUR_PHONE
     data:
@@ -62,6 +104,24 @@ Available fields on `trigger.event.data`: `unique_id`, `name`, `county`,
 2. Restart Home Assistant.
 3. Go to **Settings → Devices & Services → Add Integration**, search for
    "CAL FIRE Incidents", and add it.
+
+## Troubleshooting missing/null attributes
+
+CAL FIRE's endpoint is internal/undocumented, so field names have been
+reverse-engineered rather than pulled from an official spec. If you notice
+an attribute that's always `null` even though CAL FIRE's own incident page
+shows a value, enable debug logging to see the raw field names being sent:
+
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.calfire: debug
+```
+
+After a restart, check the log for a line like `Sample CAL FIRE incident
+properties: [...]` — that's the actual list of field names in the current
+feed, which can be compared against what `__init__.py` looks for.
 
 ## Publishing to GitHub (required for HACS)
 
