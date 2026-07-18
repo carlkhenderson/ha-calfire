@@ -1,35 +1,73 @@
-# CAL FIRE Incidents (custom Home Assistant integration)
+# CAL FIRE Incidents
 
-Creates one sensor entity per active California wildfire incident, pulled from
-CAL FIRE's public GeoJSON feed:
-https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?inactive=false
+A Home Assistant integration that creates one sensor entity per active
+California wildfire incident, pulled from CAL FIRE's incident feed.
 
-Each entity's state is acres burned. Attributes include county, admin unit,
-incident type, percent contained, start/update timestamps, source URL,
-latitude/longitude, and distance from your Home Assistant location (if a
-radius filter is set). Because latitude/longitude are exposed as attributes,
-these entities also show up on the built-in Lovelace **Map** card.
+## What you get
 
-New fires get their own entity automatically as they appear in the feed.
-When a fire drops out of the feed (contained/closed and removed by CAL
-FIRE), its entity is removed from Home Assistant entirely — but only after
-it's been missing from the feed for **2 consecutive polls in a row**
-(`MISSING_POLLS_BEFORE_REMOVAL` in `const.py`), so a brief CAL FIRE API
-hiccup doesn't delete an entity for a fire that's actually still burning.
-Before that threshold is hit, the entity is marked `unavailable` rather
-than removed. Recorder history for a removed entity isn't deleted — it's
-just no longer surfaced as a live entity, so your entity list stays clean
-instead of accumulating dead fires forever.
+- One `sensor` entity per currently-active fire, automatically created as
+  new fires appear and removed once CAL FIRE stops listing them.
+- A single `sensor.calfire_latest_incident` entity that always reflects
+  whichever fire was most recently detected — useful for automations (see
+  below).
+- A `calfire_new_incident` event fired for every new fire, as an
+  alternative way to trigger automations.
 
-## Getting notified about new fires
+Each per-fire entity's state is acres burned, with attributes for county,
+admin unit, incident type, percent contained, start/update timestamps,
+source URL, and latitude/longitude. Because latitude/longitude are exposed
+as attributes, these entities also show up on the built-in Lovelace **Map**
+card.
 
-There's a dedicated entity for this: **`sensor.calfire_latest_incident`**.
-Its state is always the name of whichever fire was most recently detected
-in the feed (starting as `None` until the first new fire shows up after HA
-starts). Attributes carry the same detail as the per-fire sensors: county,
-acres, containment, URL, lat/lon, etc.
+## Installation
 
-Point an automation's `state` trigger at it — no event filtering needed:
+### Via HACS
+
+1. In Home Assistant: **HACS → Integrations → ⋮ → Custom repositories**.
+2. Add this repository's URL, category **Integration**.
+3. Find "CAL FIRE Incidents" in HACS and install it.
+4. Restart Home Assistant.
+5. **Settings → Devices & Services → Add Integration**, search for
+   "CAL FIRE Incidents", and add it.
+
+### Manual
+
+1. Copy the `custom_components/calfire` folder into your Home Assistant
+   `config/custom_components/` directory, so you end up with
+   `config/custom_components/calfire/__init__.py`, etc.
+2. Restart Home Assistant.
+3. **Settings → Devices & Services → Add Integration**, search for
+   "CAL FIRE Incidents", and add it.
+
+## Configuration
+
+During setup (and later — see below) you can optionally set:
+
+- **Radius (km)**: only show fires within this distance of the center
+  point. Leave at `0` for all active incidents statewide.
+- **Scan interval (minutes)**: how often to poll the feed. CAL FIRE
+  doesn't update the underlying data much faster than every 15–30 minutes
+  during an active incident, so the default of 10 minutes is reasonable —
+  you don't need to go much lower.
+- **Center latitude / longitude**: leave both blank to use your Home
+  Assistant instance's configured home location (Settings → System →
+  General) as the center for the radius filter and each fire's
+  `distance_km` attribute. Set both to center on somewhere else instead —
+  useful if your HA server isn't physically where you actually want
+  "nearby" measured from (a vacation property, a family member's house,
+  etc).
+
+### Changing settings later
+
+All of the above can be changed after setup without removing the
+integration: go to **Settings → Devices & Services**, find "CAL FIRE
+Incidents", and click **Configure**. Changes take effect immediately — the
+integration reloads itself automatically, no restart required.
+
+## Automations: getting notified about new fires
+
+**Simplest option** — watch `sensor.calfire_latest_incident` with a plain
+`state` trigger:
 
 ```yaml
 alias: New CAL FIRE incident notification
@@ -53,17 +91,12 @@ action:
 
 The `condition` just guards against the very first state ever recorded
 (`None`) firing a bogus notification — every change after that is a real
-new fire.
+new fire. If more than one fire appears in the same poll cycle, this
+entity surfaces whichever has burned the most acres; the others are still
+tracked as their own per-fire entities, just not reflected here.
 
-If more than one fire appears in the same poll cycle, this entity surfaces
-whichever has burned the most acres; the others are still tracked as their
-own per-fire entities, so nothing is lost, just not reflected here.
-
-### Alternative: a custom event
-
-The integration also fires a `calfire_new_incident` event for *every* new
-fire (not just the single most-recent one), if you'd rather trigger off
-that instead:
+**Alternative** — trigger on the `calfire_new_incident` event instead,
+which fires once for *every* new fire (not just the most recent):
 
 ```yaml
 alias: New CAL FIRE incident notification (event-based)
@@ -86,31 +119,25 @@ Available fields on `trigger.event.data`: `unique_id`, `name`, `county`,
 `admin_unit`, `incident_type`, `acres_burned`, `percent_contained`,
 `distance_km`, `url`, `latitude`, `longitude`.
 
-## Installation via HACS (recommended once this is on GitHub)
+## Entity lifecycle
 
-1. Push this folder to a GitHub repo (see "Publishing to GitHub" below).
-2. In Home Assistant: **HACS → Integrations → ⋮ → Custom repositories**.
-3. Add your repo URL, category **Integration**.
-4. Find "CAL FIRE Incidents" in HACS and install it.
-5. Restart Home Assistant.
-6. **Settings → Devices & Services → Add Integration**, search for
-   "CAL FIRE Incidents", and add it.
+New fires get their own entity automatically as they appear in the feed.
+When a fire drops out of the feed (contained/closed and removed by CAL
+FIRE), its entity is removed from Home Assistant entirely — but only after
+it's been missing from the feed for 2 consecutive polls in a row, so a
+brief CAL FIRE API hiccup doesn't delete an entity for a fire that's
+actually still burning. At the default 10-minute scan interval, that means
+removal can take up to ~20–30 minutes after CAL FIRE actually drops the
+fire — not a fixed time, since it depends on exactly when between polls
+the fire disappeared. Before that threshold is hit, the entity is marked
+`unavailable` rather than removed.
 
-## Manual installation (no HACS)
+## Troubleshooting
 
-1. Copy the `custom_components/calfire` folder into your Home Assistant
-   `config/custom_components/` directory, so you end up with:
-   `config/custom_components/calfire/__init__.py`, etc.
-2. Restart Home Assistant.
-3. Go to **Settings → Devices & Services → Add Integration**, search for
-   "CAL FIRE Incidents", and add it.
-
-## Troubleshooting missing/null attributes
-
-CAL FIRE's endpoint is internal/undocumented, so field names have been
-reverse-engineered rather than pulled from an official spec. If you notice
-an attribute that's always `null` even though CAL FIRE's own incident page
-shows a value, enable debug logging to see the raw field names being sent:
+**An attribute is always `null` even though CAL FIRE's own incident page
+shows a value.** CAL FIRE's feed is internal/undocumented, so field names
+have been reverse-engineered. Enable debug logging to see the raw field
+names being sent:
 
 ```yaml
 logger:
@@ -120,55 +147,20 @@ logger:
 ```
 
 After a restart, check the log for a line like `Sample CAL FIRE incident
-properties: [...]` — that's the actual list of field names in the current
-feed, which can be compared against what `__init__.py` looks for.
+properties: [...]` — the actual field names in the current feed.
 
-## Publishing to GitHub (required for HACS)
+**A fire's entity is still around well beyond the ~30 minute removal
+window.** Check, in order:
 
-HACS installs from a GitHub repository, so:
+1. Whether CAL FIRE's own incidents page still lists it — they often keep
+   a fire listed for a while after full containment, which isn't a bug on
+   our end.
+2. Debug logs (same setup as above) for lines like `missing from feed
+   (x/y consecutive polls)`, which show the actual countdown in progress.
 
-1. Replace `carlkhenderson` in `custom_components/calfire/manifest.json`
-   and `LICENSE` with your actual details.
-2. Create a new **public** repo on GitHub, e.g. `ha-calfire`.
-3. From this folder:
-   ```bash
-   git remote add origin https://github.com/carlkhenderson/ha-calfire.git
-   git branch -M main
-   git push -u origin main
-   ```
-4. The included `.github/workflows/validate.yml` runs `hassfest` and the
-   HACS validation action on every push — check the Actions tab after
-   pushing to confirm both pass (HACS requires this for a repo to be
-   addable, and it catches manifest/structure mistakes early).
-4. Optionally set:
-   - **Radius (km)**: only show fires within this distance of the center
-     point below. Leave at `0` for all active incidents statewide.
-   - **Scan interval (minutes)**: how often to poll the feed. CAL FIRE
-     doesn't update the underlying data much faster than every 15–30 min
-     during an active incident, so the default of 10 minutes is reasonable;
-     you don't need to go much lower.
-   - **Center latitude / longitude**: leave both blank to use your Home
-     Assistant instance's configured home location (Settings -> System ->
-     General) as the center for the radius filter and each fire's
-     `distance_km` attribute. Set both to center on somewhere else instead
-     — useful if your HA server isn't physically where you actually want
-     "nearby" measured from (a vacation property, a family member's house,
-     etc).
-
-## Changing settings later
-
-All of the above — radius, scan interval, and center point — can be
-changed after setup without removing the integration: go to **Settings ->
-Devices & Services**, find "CAL FIRE Incidents", and click **Configure**.
-Changes take effect immediately; the integration reloads itself
-automatically rather than requiring a Home Assistant restart.
-
-## Notes / things you may want to tweak
+## Notes
 
 - The feed only includes fires CAL FIRE currently tracks (roughly 10+ acre
-  wildfires and other significant incidents) — not every reported ignition.
-- If you'd rather have the sensor's *state* be percent contained instead of
-  acres burned, swap `native_value` in `sensor.py`.
-- If you want entities removed entirely (rather than marked unavailable)
-  once a fire drops off the feed, that logic can be added in `sensor.py`
-  using the entity registry — ask if you'd like that version.
+  wildfires and other significant incidents), not every reported ignition.
+- If you'd rather the sensor's *state* be percent contained instead of
+  acres burned, that's a one-line change to `native_value` in `sensor.py`.
