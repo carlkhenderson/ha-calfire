@@ -14,9 +14,10 @@ California wildfire incident, pulled from CAL FIRE's incident feed.
   alternative way to trigger automations.
 
 Each per-fire entity's state is acres burned, with attributes for county,
-admin unit, incident type, percent contained, start/update timestamps,
-source URL, latitude/longitude, and distance from your configured center
-point — as `distance_km` and `distance_mi` (always both present), plus a
+admin unit, incident type, percent contained, start/update timestamps, a
+computed `days_burning` (days since the fire started, parsed from CAL
+FIRE's start date), source URL, latitude/longitude, and distance from your
+configured center point — as `distance_km` and `distance_mi` (always both present), plus a
 `distance` + `distance_unit` pair that reflects your chosen display unit
 (see Configuration below). Because latitude/longitude are exposed as
 attributes, these entities also show up on the built-in Lovelace **Map**
@@ -124,7 +125,7 @@ action:
 
 Available fields on `trigger.event.data`: `unique_id`, `name`, `county`,
 `admin_unit`, `incident_type`, `acres_burned`, `percent_contained`,
-`distance_km`, `distance_mi`, `distance`, `distance_unit`, `url`, `latitude`, `longitude`.
+`days_burning`, `distance_km`, `distance_mi`, `distance`, `distance_unit`, `url`, `latitude`, `longitude`.
 
 ## Entity lifecycle
 
@@ -165,6 +166,13 @@ window.** Check, in order:
 2. Debug logs (same setup as above) for lines like `missing from feed
    (x/y consecutive polls)`, which show the actual countdown in progress.
 
+**`days_burning` is always `null`.** This is computed by parsing the raw
+`started` date CAL FIRE provides, which — like everything else about this
+feed — isn't from a documented, stable format. If parsing fails, debug
+logs (same setup as above) show a line like `Could not parse started date
+'...'`, which will tell you exactly what format is actually coming
+through so the parser can be adjusted.
+
 ## Dashboard: list of active fires by distance
 
 Since fire entities are created and removed dynamically, a normal
@@ -191,10 +199,10 @@ content: >
   {% if sorted_rows | length == 0 %}
   No active fires currently tracked.
   {% else %}
-  | Fire | Distance | Acres | Contained | County |
-  | --- | --- | --- | --- | --- |
+  | Fire | Distance | Acres | Contained | Days | County |
+  | --- | --- | --- | --- | --- | --- |
   {% for st in sorted_rows %}
-  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance }} {{ st.attributes.distance_unit }} | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.county }} |
+  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance }} {{ st.attributes.distance_unit }} | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.days_burning }} | {{ st.attributes.county }} |
   {% endfor %}
   {% endif %}
 ```
@@ -255,15 +263,14 @@ cards:
               secondary: >-
                 {{ states(config.entity) }} ac •
                 {{ state_attr(config.entity, 'percent_contained') | round(0) }}% contained •
+                {{ state_attr(config.entity, 'days_burning') }}d •
                 {{ state_attr(config.entity, 'distance') }} {{ state_attr(config.entity, 'distance_unit') }} •
                 {{ state_attr(config.entity, 'county') }}
               icon: mdi:fire
               icon_color: >-
                 {% set pc = state_attr(config.entity, 'percent_contained') | float(0) %}
-                {% if pc >= 100 %}green
-                {% elif pc >= 50 %}amber
-                {% else %}red
-                {% endif %}
+                {% set pc = [[pc, 0] | max, 100] | min %}
+                hsl({{ (pc * 1.2) | round(0) }}, 70%, 45%)
               tap_action:
                 action: url
                 url_path: ${ states[this._config.entities[0]].attributes.url }
@@ -304,9 +311,12 @@ A couple of other pieces worth knowing:
   show up here.
 - `sort` orders the generated cards nearest-first by `distance_km`, same
   as the Markdown table above.
-- Icon color shifts red → amber → green as containment increases — tweak
-  the thresholds in `icon_color` to taste, or swap in different Mushroom
-  card fields (e.g. `secondary` wording, adding a `badge_icon` for
+- Icon color is a continuous red → yellow → green gradient as containment
+  goes from 0% to 100%, computed as an HSL hue (`hsl(hue, 70%, 45%)`,
+  where hue runs from 0° at 0% contained to 120° at 100%) rather than
+  fixed color buckets. Tweak the `70%`/`45%` saturation/lightness values,
+  the `1.2` multiplier (hue range), or swap in different Mushroom card
+  fields (e.g. `secondary` wording, adding a `badge_icon` for
   `is_active`, etc).
 
 ## Notes
