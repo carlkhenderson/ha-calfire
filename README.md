@@ -303,7 +303,12 @@ that's a fixed config, not something Mushroom re-templates per entity.
 `config-template-card` closes that gap: it evaluates JS template
 expressions (`${ ... }`) anywhere in a nested card's config, including
 inside `tap_action`, using the real entity_id that `auto-entities` already
-substituted in:
+substituted in.
+
+Want the icon itself to show containment as a filling pie/radial shape
+(rather than just a color shift)? Add one more card:
+[card-mod](https://github.com/thomasloven/lovelace-card-mod) (HACS →
+Frontend). It's included in the card below already:
 
 ```yaml
 type: vertical-stack
@@ -344,6 +349,17 @@ cards:
               tap_action:
                 action: url
                 url_path: ${ states[this._config.entities[0]].attributes.url }
+              card_mod:
+                style:
+                  mushroom-shape-icon$: |
+                    {% set pc = state_attr(config.entity, 'percent_contained') | float(0) %}
+                    {% set pc = [[pc, 0] | max, 100] | min %}
+                    .shape {
+                      background: conic-gradient(
+                        hsl({{ (pc * 1.2) | round(0) }}, 70%, 45%) 0% {{ pc }}%,
+                        var(--card-background-color) {{ pc }}% 100%
+                      );
+                    }
     sort:
       method: attribute
       attribute: distance_km
@@ -406,6 +422,16 @@ A couple of other pieces worth knowing:
   the `1.2` multiplier (hue range), or swap in different Mushroom card
   fields (e.g. `secondary` wording, adding a `badge_icon` for
   `days_burning`, etc).
+- `card_mod` makes the icon's circular background itself fill up like a
+  pie chart as containment increases, using a CSS `conic-gradient`: filled
+  from 0% up to `percent_contained`, background color the rest of the way
+  around. `mushroom-shape-icon$:` is card-mod's syntax for reaching into
+  that specific child element's internal styling (the `$` pierces its
+  shadow DOM); `.shape` is the circular element behind the flame icon
+  whose `background` this replaces. The fill color reuses the same hue
+  calculation as `icon_color` above, so color and fill both track
+  containment — drop the `card_mod` block entirely if that feels like
+  redundant visual noise rather than reinforcement.
 
 ## Notes
 
