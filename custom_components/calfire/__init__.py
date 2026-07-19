@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 import math
+import re
 
 import async_timeout
 
@@ -30,6 +31,7 @@ from homeassistant.helpers.entity_registry import (
     async_get as async_get_entity_registry,
 )
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     API_URL,
@@ -114,6 +116,42 @@ def _first(props: dict, *keys):
         if key in props and props[key] is not None:
             return props[key]
     return None
+
+
+# ASP.NET/Umbraco APIs (which CAL FIRE's is built on) sometimes serialize
+# dates as `/Date(1626307200000-0700)/` — a legacy JSON.NET format encoding
+# milliseconds-since-epoch plus a timezone offset — rather than plain ISO
+# 8601. This regex recognizes that format so `_parse_started_date` below
+# can handle either.
+_DOTNET_DATE_RE = re.compile(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/")
+
+
+def _parse_started_date(value):
+    """Best-effort parse of CAL FIRE's "started" date into an aware datetime.
+
+    Returns None if `value` is missing or in a format we don't recognize,
+    rather than raising — a fire missing/unparseable a start date shouldn't
+    break the whole integration, it should just mean `days_burning` (see
+    `_async_update_data`) comes back as None for that fire.
+    """
+    if not value:
+        return None
+
+    match = _DOTNET_DATE_RE.match(str(value))
+    if match:
+        return dt_util.utc_from_timestamp(int(match.group(1)) / 1000)
+
+    # `dt_util.parse_datetime` (Home Assistant's own date parsing utility,
+    # so no extra dependency needed) handles standard ISO 8601 strings,
+    # with or without a timezone offset.
+    parsed = dt_util.parse_datetime(str(value))
+    if parsed is None:
+        return None
+    # If the string had no timezone info, assume it was already UTC rather
+    # than leaving it "naive" — Python raises an error comparing a naive
+    # and timezone-aware datetime, and `dt_util.as_utc` is a no-op if it
+    # already has a timezone.
+    return dt_util.as_utc(parsed)
 
 
 class CalFireCoordinator(DataUpdateCoordinator):
@@ -302,6 +340,17 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 distance_mi if self.distance_unit == "mi" else distance_km
             )
 
+            raw_started = _first(props, "Started", "StartedDate")
+            started_dt = _parse_started_date(raw_started)
+            days_burning = None
+            if started_dt is not None:
+                days_burning = max((dt_util.utcnow() - started_dt).days, 0)
+            elif raw_started:
+                # We got *something* for the start date but couldn't parse
+                # it — surface that in debug logs rather than silently
+                # leaving days_burning as None with no explanation.
+                _LOGGER.debug("Could not parse started date %r for %s", raw_started, unique_id)
+
             # Pull out all the fields we care about into a plain dict.
             # `_first()` tries several possible field-name variants in
             # order (see its docstring above) since CAL FIRE's exact
@@ -319,7 +368,8 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 "incident_type": _first(
                     props, "IncidentType", "Type", "IncidentTypeDisplay"
                 ),
-                "started": _first(props, "Started", "StartedDate"),
+                "started": raw_started,
+                "days_burning": days_burning,
                 "updated": _first(props, "Updated", "UpdatedDate"),
                 "url": props.get("Url"),
                 "is_active": props.get("IsActive"),
