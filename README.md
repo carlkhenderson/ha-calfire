@@ -16,7 +16,9 @@ California wildfire incident, pulled from CAL FIRE's incident feed.
 Each per-fire entity's state is acres burned, with attributes for county,
 admin unit, incident type, percent contained, start/update timestamps, a
 computed `days_burning` (days since the fire started, parsed from CAL
-FIRE's start date), source URL, latitude/longitude, and distance from your
+FIRE's start date), source URL, latitude/longitude, which `hub` it came
+from (only meaningful if you run more than one instance — see
+Configuration below), and distance from your
 configured center point — as `distance_km` and `distance_mi` (always both present), plus a
 `distance` + `distance_unit` pair that reflects your chosen display unit
 (see Configuration below). Because latitude/longitude are exposed as
@@ -47,6 +49,10 @@ card.
 
 During setup (and later — see below) you can optionally set:
 
+- **Name**: shown in Settings → Devices & Services, and exposed as a
+  `hub` attribute on every fire entity. Only really matters if you're
+  running more than one instance of this integration (see "Multiple
+  hubs" below) — otherwise the default is fine.
 - **Radius (km)**: only show fires within this distance of the center
   point. Leave at `0` for all active incidents statewide.
 - **Scan interval (minutes)**: how often to poll the feed. CAL FIRE
@@ -71,6 +77,31 @@ All of the above can be changed after setup without removing the
 integration: go to **Settings → Devices & Services**, find "CAL FIRE
 Incidents", and click **Configure**. Changes take effect immediately — the
 integration reloads itself automatically, no restart required.
+
+### Multiple hubs
+
+You can add this integration more than once — e.g. one instance centered
+on your home, another centered on a relative's place — each with its own
+radius, center point, and name. Just go through **Settings → Devices &
+Services → Add Integration → CAL FIRE Incidents** again and give the
+second one a distinct **Name** (e.g. "CAL FIRE — In-Laws") so the two are
+easy to tell apart in the UI.
+
+Every fire entity carries a `hub` attribute set to that instance's Name,
+which is the reliable way to filter a dashboard down to just one hub's
+fires — see the `attributes: {hub: "..."}` filter in the dashboard
+examples below. Fire entities themselves are scoped per hub internally, so
+the same real-world fire matching both hubs' radii (overlapping areas, or
+either radius left at `0`/statewide) correctly gets its own entity under
+each hub rather than colliding.
+
+One thing to watch for: each hub's `Latest Incident` singleton is named
+identically ("Latest Incident"), so Home Assistant will auto-generate
+`sensor.latest_incident` for the first hub and `sensor.latest_incident_2`
+for the second (entity_id doesn't otherwise indicate which hub it belongs
+to). Check each one's `hub` attribute in Developer Tools → States to
+confirm which is which before wiring up automations — see the note in the
+automations section below on scoping a single automation to one hub.
 
 ## Automations: getting notified about new fires
 
@@ -123,9 +154,19 @@ action:
         url: "{{ trigger.event.data.url }}"
 ```
 
-Available fields on `trigger.event.data`: `unique_id`, `name`, `county`,
+Available fields on `trigger.event.data`: `unique_id`, `hub`, `name`, `county`,
 `admin_unit`, `incident_type`, `acres_burned`, `percent_contained`,
 `days_burning`, `distance_km`, `distance_mi`, `distance`, `distance_unit`, `url`, `latitude`, `longitude`.
+
+**Running multiple hubs and only want one to trigger this automation?**
+Both examples above fire for whichever hub the entity_id/event belongs to
+by nature (each hub has its own `sensor.calfire_latest_incident_N` and its
+own `calfire_new_incident` events) — but if you'd rather have one
+automation watch a specific hub regardless of entity_id numbering, add a
+condition checking the `hub` attribute/field, e.g.
+`{{ trigger.to_state.attributes.hub == 'CAL FIRE Incidents' }}` (state
+trigger) or `{{ trigger.event.data.hub == 'CAL FIRE Incidents' }}`
+(event trigger), matching whatever Name you gave that hub.
 
 ## Entity lifecycle
 
@@ -141,6 +182,14 @@ the fire disappeared. Before that threshold is hit, the entity is marked
 `unavailable` rather than removed.
 
 ## Troubleshooting
+
+**Upgrading from a version before multi-hub support.** As of 0.10.0,
+per-fire entities are internally scoped per hub instance (to prevent two
+hubs colliding over the same fire). If you already had this integration
+set up, its existing entities are migrated automatically the next time it
+reloads or Home Assistant restarts — same entity_ids, same history,
+nothing to do on your end. This is a one-time, one-way migration; there's
+no need to remove and re-add the integration.
 
 **An attribute is always `null` even though CAL FIRE's own incident page
 shows a value.** CAL FIRE's feed is internal/undocumented, so field names
@@ -172,6 +221,21 @@ feed — isn't from a documented, stable format. If parsing fails, debug
 logs (same setup as above) show a line like `Could not parse started date
 '...'`, which will tell you exactly what format is actually coming
 through so the parser can be adjusted.
+
+**A fire shows up in Settings → Entities but not on a dashboard card
+(particularly the auto-entities/Mushroom one).** Two known causes:
+1. Fixed as of 0.9.1 — a fire briefly missing from the feed (within its
+   removal grace period) used to have all its attributes wiped to
+   nothing, including `distance_km`, which broke dashboard cards that sort
+   or filter on that attribute. Update to the latest version if you still
+   see this.
+2. If the fire is brand new, the Mushroom/auto-entities card example
+   below filters on a live state attribute specifically to avoid this, but
+   if you've customized it to filter using auto-entities' `integration:`,
+   `device:`, or `area:` filter types instead, those read from the entity
+   registry rather than live state and can lag behind a just-created
+   entity until the dashboard is refreshed. A hard refresh
+   (Ctrl+Shift+R) confirms this is the cause.
 
 ## Dashboard: list of active fires by distance
 
@@ -210,6 +274,13 @@ content: >
 Add it via **Edit Dashboard → Add Card → Manual**, paste the YAML above,
 and save. It updates automatically as fires appear, disappear, and move
 in distance-sorted order — no manual entity list to maintain.
+
+Running multiple hubs and want this table scoped to just one? Add a
+`hub` check to the `{% if %}` condition, e.g.
+`and st.attributes.hub == 'CAL FIRE Incidents'` (matching whatever Name
+you gave that hub) — `integration_entities('calfire')` returns entities
+from every hub instance mixed together, so this is how to split them back
+apart per table.
 
 ### One Mushroom card per fire
 
@@ -251,7 +322,8 @@ cards:
     card_param: cards
     filter:
       include:
-        - integration: calfire
+        - attributes:
+            unit_of_measurement: acres
           options:
             type: custom:config-template-card
             entities:
@@ -274,8 +346,6 @@ cards:
               tap_action:
                 action: url
                 url_path: ${ states[this._config.entities[0]].attributes.url }
-      exclude:
-        - name: "Latest Incident"
     sort:
       method: attribute
       attribute: distance_km
@@ -302,13 +372,30 @@ with zero extra dependencies (Markdown's own link rendering resolves
 templated URLs fine, unlike Mushroom's `tap_action`).
 
 A couple of other pieces worth knowing:
-- `filter.include: [{integration: calfire}]` picks up every entity this
-  integration creates, automatically — new fires get a card without
-  touching the dashboard, closed-out fires lose theirs the moment their
-  entity is removed.
-- `exclude: [{name: "Latest Incident"}]` excludes the
-  `sensor.calfire_latest_incident` singleton, so only real per-fire cards
-  show up here.
+- `filter.include: [{attributes: {unit_of_measurement: acres}}]` picks up
+  every per-fire entity automatically — every `CalFireIncidentSensor` has
+  this, and the `Latest Incident` singleton doesn't, so nothing extra is
+  needed to exclude it. This deliberately matches on a live *state*
+  attribute rather than using auto-entities' `integration:` filter type
+  (which matches via the entity/device *registry* instead of live state).
+  That distinction matters: registry-based lookups can lag behind
+  brand-new entities until the dashboard is manually refreshed, whereas
+  state-based filters like this one update instantly the moment an
+  entity's state appears or disappears — no manual refresh ever needed,
+  in either direction.
+- **Running multiple hubs?** Add a second `attributes` condition to the
+  same include filter to scope the card to just one hub, e.g.:
+  ```yaml
+  include:
+    - attributes:
+        unit_of_measurement: acres
+        hub: "CAL FIRE Incidents"
+      options:
+        ...
+  ```
+  (all conditions inside one filter entry must match — this is an AND,
+  not an OR). Duplicate the whole card, swap in each hub's Name, and
+  you'll get a separate "Active Fires" section per location.
 - `sort` orders the generated cards nearest-first by `distance_km`, same
   as the Markdown table above.
 - Icon color is a continuous red → yellow → green gradient as containment
