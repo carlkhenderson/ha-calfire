@@ -188,14 +188,6 @@ the fire disappeared. Before that threshold is hit, the entity is marked
 
 ## Troubleshooting
 
-**Upgrading from a version before multi-hub support.** As of 0.10.0,
-per-fire entities are internally scoped per hub instance (to prevent two
-hubs colliding over the same fire). If you already had this integration
-set up, its existing entities are migrated automatically the next time it
-reloads or Home Assistant restarts — same entity_ids, same history,
-nothing to do on your end. This is a one-time, one-way migration; there's
-no need to remove and re-add the integration.
-
 **An attribute is always `null` even though CAL FIRE's own incident page
 shows a value.** CAL FIRE's feed is internal/undocumented, so field names
 have been reverse-engineered. Enable debug logging to see the raw field
@@ -413,7 +405,7 @@ A couple of other pieces worth knowing:
   fixed color buckets. Tweak the `70%`/`45%` saturation/lightness values,
   the `1.2` multiplier (hue range), or swap in different Mushroom card
   fields (e.g. `secondary` wording, adding a `badge_icon` for
-  `is_active`, etc).
+  `days_burning`, etc).
 
 ## Notes
 
