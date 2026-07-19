@@ -23,6 +23,13 @@ CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
 # location (Settings -> System -> General).
 CONF_CENTER_LATITUDE = "center_latitude"
 CONF_CENTER_LONGITUDE = "center_longitude"
+# Which unit to show distances in. This only affects the "distance" /
+# "distance_unit" attributes (see __init__.py) — the radius filter itself
+# (CONF_RADIUS_KM) always stays in kilometers regardless of this setting,
+# to keep its meaning unambiguous.
+CONF_DISTANCE_UNIT = "distance_unit"
+DEFAULT_DISTANCE_UNIT = "km"
+KM_TO_MILES = 0.621371
 
 # Default values offered in the setup form if the user doesn't change them.
 DEFAULT_RADIUS_KM = 0  # 0 = no distance filtering, show all incidents statewide

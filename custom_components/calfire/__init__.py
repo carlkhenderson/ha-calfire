@@ -35,11 +35,14 @@ from .const import (
     API_URL,
     CONF_CENTER_LATITUDE,
     CONF_CENTER_LONGITUDE,
+    CONF_DISTANCE_UNIT,
     CONF_RADIUS_KM,
     CONF_SCAN_INTERVAL_MINUTES,
+    DEFAULT_DISTANCE_UNIT,
     DEFAULT_RADIUS_KM,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
+    KM_TO_MILES,
     MISSING_POLLS_BEFORE_REMOVAL,
 )
 
@@ -137,11 +140,20 @@ class CalFireCoordinator(DataUpdateCoordinator):
         scan_minutes: int,
         center_lat: float | None = None,
         center_lon: float | None = None,
+        distance_unit: str = DEFAULT_DISTANCE_UNIT,
     ) -> None:
         # Optional filter: if > 0, incidents farther than this from the
         # center point are dropped entirely (never become entities). 0
-        # means "no filtering".
+        # means "no filtering". Always interpreted in kilometers regardless
+        # of `distance_unit` below, to keep its meaning unambiguous.
         self.radius_km = radius_km
+
+        # Which unit the "distance" / "distance_unit" attributes should be
+        # shown in (see _async_update_data). Doesn't affect radius_km above,
+        # or the always-present "distance_km" attribute — just adds a
+        # unit-aware convenience pair for dashboards/automations that would
+        # rather not do the km->mi conversion themselves.
+        self.distance_unit = distance_unit
 
         # The center point used for both the radius filter and each
         # incident's "distance_km" attribute. Defaults to Home Assistant's
@@ -280,6 +292,16 @@ class CalFireCoordinator(DataUpdateCoordinator):
             if self.radius_km and distance_km is not None and distance_km > self.radius_km:
                 continue
 
+            distance_mi = distance_km * KM_TO_MILES if distance_km is not None else None
+            # A convenience pair reflecting whichever unit was chosen in
+            # setup/options, so dashboards and automations don't have to do
+            # the km<->mi conversion (or know which raw attribute to use)
+            # themselves. `distance_km` (and the new `distance_mi`) are
+            # still always present too, regardless of this preference.
+            distance_in_preferred_unit = (
+                distance_mi if self.distance_unit == "mi" else distance_km
+            )
+
             # Pull out all the fields we care about into a plain dict.
             # `_first()` tries several possible field-name variants in
             # order (see its docstring above) since CAL FIRE's exact
@@ -304,6 +326,13 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 "latitude": lat,
                 "longitude": lon,
                 "distance_km": round(distance_km, 1) if distance_km is not None else None,
+                "distance_mi": round(distance_mi, 1) if distance_mi is not None else None,
+                "distance": (
+                    round(distance_in_preferred_unit, 1)
+                    if distance_in_preferred_unit is not None
+                    else None
+                ),
+                "distance_unit": self.distance_unit,
             }
 
         # --- Step 3: work out which fires are brand new since last poll ---
@@ -388,8 +417,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scan_minutes = _get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES)
     center_lat = _get(CONF_CENTER_LATITUDE, None)
     center_lon = _get(CONF_CENTER_LONGITUDE, None)
+    distance_unit = _get(CONF_DISTANCE_UNIT, DEFAULT_DISTANCE_UNIT)
 
-    coordinator = CalFireCoordinator(hass, radius_km, scan_minutes, center_lat, center_lon)
+    coordinator = CalFireCoordinator(
+        hass, radius_km, scan_minutes, center_lat, center_lon, distance_unit
+    )
 
     # If this integration was previously set up (and is now reloading, or
     # Home Assistant just restarted), there may already be per-fire

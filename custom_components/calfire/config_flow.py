@@ -23,8 +23,10 @@ from homeassistant.config_entries import ConfigEntry
 from .const import (
     CONF_CENTER_LATITUDE,
     CONF_CENTER_LONGITUDE,
+    CONF_DISTANCE_UNIT,
     CONF_RADIUS_KM,
     CONF_SCAN_INTERVAL_MINUTES,
+    DEFAULT_DISTANCE_UNIT,
     DEFAULT_RADIUS_KM,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
@@ -53,6 +55,10 @@ def _schema(current: dict) -> vol.Schema:
                 CONF_SCAN_INTERVAL_MINUTES,
                 default=current.get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES),
             ): vol.Coerce(int),
+            vol.Optional(
+                CONF_DISTANCE_UNIT,
+                default=current.get(CONF_DISTANCE_UNIT, DEFAULT_DISTANCE_UNIT),
+            ): vol.In(["km", "mi"]),
             # These two are deliberately left with NO default. An
             # `vol.Optional` field without a `default=` simply doesn't
             # appear in the submitted data at all if the user leaves it
