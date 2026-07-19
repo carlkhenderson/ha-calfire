@@ -45,6 +45,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
     KM_TO_MILES,
+    MI_TO_KM,
     MISSING_POLLS_BEFORE_REMOVAL,
 )
 
@@ -176,7 +177,7 @@ class CalFireCoordinator(DataUpdateCoordinator):
         hass: HomeAssistant,
         entry_id: str,
         hub_name: str,
-        radius_km: float,
+        radius: float,
         scan_minutes: int,
         center_lat: float | None = None,
         center_lon: float | None = None,
@@ -193,18 +194,19 @@ class CalFireCoordinator(DataUpdateCoordinator):
         self.entry_id = entry_id
         self.hub_name = hub_name
 
+        # Which unit the person typed the radius in, on the setup/options
+        # form — "km" or "mi". Every fire's distance is always exposed as
+        # both `distance_km` and `distance_mi` regardless of this setting;
+        # this only controls how `radius` (below) gets interpreted.
+        self.distance_unit = distance_unit
+
         # Optional filter: if > 0, incidents farther than this from the
         # center point are dropped entirely (never become entities). 0
-        # means "no filtering". Always interpreted in kilometers regardless
-        # of `distance_unit` below, to keep its meaning unambiguous.
-        self.radius_km = radius_km
-
-        # Which unit the "distance" / "distance_unit" attributes should be
-        # shown in (see _async_update_data). Doesn't affect radius_km above,
-        # or the always-present "distance_km" attribute — just adds a
-        # unit-aware convenience pair for dashboards/automations that would
-        # rather not do the km->mi conversion themselves.
-        self.distance_unit = distance_unit
+        # means "no filtering". `radius` is whatever number the person
+        # typed in, in whichever unit they chose above — converted here,
+        # once, into kilometers, since that's what `_haversine_km` and the
+        # comparison in `_async_update_data` both work in.
+        self.radius_km = radius * MI_TO_KM if distance_unit == "mi" else radius
 
         # The center point used for both the radius filter and each
         # incident's "distance_km" attribute. Defaults to Home Assistant's
@@ -344,14 +346,6 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 continue
 
             distance_mi = distance_km * KM_TO_MILES if distance_km is not None else None
-            # A convenience pair reflecting whichever unit was chosen in
-            # setup/options, so dashboards and automations don't have to do
-            # the km<->mi conversion (or know which raw attribute to use)
-            # themselves. `distance_km` (and the new `distance_mi`) are
-            # still always present too, regardless of this preference.
-            distance_in_preferred_unit = (
-                distance_mi if self.distance_unit == "mi" else distance_km
-            )
 
             raw_started = _first(props, "Started", "StartedDate")
             started_dt = _parse_started_date(raw_started)
@@ -390,12 +384,6 @@ class CalFireCoordinator(DataUpdateCoordinator):
                 "longitude": lon,
                 "distance_km": round(distance_km, 1) if distance_km is not None else None,
                 "distance_mi": round(distance_mi, 1) if distance_mi is not None else None,
-                "distance": (
-                    round(distance_in_preferred_unit, 1)
-                    if distance_in_preferred_unit is not None
-                    else None
-                ),
-                "distance_unit": self.distance_unit,
                 "hub": self.hub_name,
             }
 
@@ -477,7 +465,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     def _get(key: str, default):
         return entry.options.get(key, entry.data.get(key, default))
 
-    radius_km = _get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)
+    radius = _get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)
     scan_minutes = _get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES)
     center_lat = _get(CONF_CENTER_LATITUDE, None)
     center_lon = _get(CONF_CENTER_LONGITUDE, None)
@@ -487,7 +475,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         entry.entry_id,
         entry.title,
-        radius_km,
+        radius,
         scan_minutes,
         center_lat,
         center_lon,

@@ -54,16 +54,16 @@ def _schema(current: dict) -> vol.Schema:
                 CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)
             ): str,
             vol.Optional(
+                CONF_DISTANCE_UNIT,
+                default=current.get(CONF_DISTANCE_UNIT, DEFAULT_DISTANCE_UNIT),
+            ): vol.In(["km", "mi"]),
+            vol.Optional(
                 CONF_RADIUS_KM, default=current.get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_SCAN_INTERVAL_MINUTES,
                 default=current.get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES),
             ): vol.Coerce(int),
-            vol.Optional(
-                CONF_DISTANCE_UNIT,
-                default=current.get(CONF_DISTANCE_UNIT, DEFAULT_DISTANCE_UNIT),
-            ): vol.In(["km", "mi"]),
             # These two are deliberately left with NO default. An
             # `vol.Optional` field without a `default=` simply doesn't
             # appear in the submitted data at all if the user leaves it

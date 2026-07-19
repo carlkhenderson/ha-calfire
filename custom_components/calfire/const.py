@@ -23,6 +23,9 @@ API_URL = "https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?ina
 
 # Keys used in the config entry's `.data` dict — i.e. whatever the setup
 # form in config_flow.py collects, and what __init__.py reads back out.
+# NOTE: the stored key is still "radius_km" for backward compatibility
+# with existing installs, but the *value* is interpreted according to
+# CONF_DISTANCE_UNIT below (km or mi) — see CalFireCoordinator.__init__.
 CONF_RADIUS_KM = "radius_km"
 CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
 # Optional override for the radius filter's center point. If either is left
@@ -30,13 +33,14 @@ CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
 # location (Settings -> System -> General).
 CONF_CENTER_LATITUDE = "center_latitude"
 CONF_CENTER_LONGITUDE = "center_longitude"
-# Which unit to show distances in. This only affects the "distance" /
-# "distance_unit" attributes (see __init__.py) — the radius filter itself
-# (CONF_RADIUS_KM) always stays in kilometers regardless of this setting,
-# to keep its meaning unambiguous.
+# Which unit the person is entering the radius in ("km" or "mi") — this is
+# a units-of-input choice, not a display preference. Every fire's distance
+# is always exposed as both `distance_km` and `distance_mi` attributes
+# regardless of this setting.
 CONF_DISTANCE_UNIT = "distance_unit"
 DEFAULT_DISTANCE_UNIT = "km"
 KM_TO_MILES = 0.621371
+MI_TO_KM = 1.609344
 
 # Default values offered in the setup form if the user doesn't change them.
 DEFAULT_RADIUS_KM = 0  # 0 = no distance filtering, show all incidents statewide
