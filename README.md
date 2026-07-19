@@ -18,12 +18,11 @@ admin unit, incident type, percent contained, start/update timestamps, a
 computed `days_burning` (days since the fire started, parsed from CAL
 FIRE's start date), source URL, latitude/longitude, which `hub` it came
 from (only meaningful if you run more than one instance — see
-Configuration below), and distance from your
-configured center point — as `distance_km` and `distance_mi` (always both present), plus a
-`distance` + `distance_unit` pair that reflects your chosen display unit
-(see Configuration below). Because latitude/longitude are exposed as
-attributes, these entities also show up on the built-in Lovelace **Map**
-card.
+Configuration below), and distance from your configured center point as
+both `distance_km` and `distance_mi` (always both present, regardless of
+which unit you used when setting the radius — see Configuration below).
+Because latitude/longitude are exposed as attributes, these entities also
+show up on the built-in Lovelace **Map** card.
 
 ## Installation
 
@@ -53,23 +52,23 @@ During setup (and later — see below) you can optionally set:
   `hub` attribute on every fire entity. Only really matters if you're
   running more than one instance of this integration (see "Multiple
   hubs" below) — otherwise the default is fine.
-- **Radius (km)**: only show fires within this distance of the center
-  point. Leave at `0` for all active incidents statewide.
+- **Distance unit (km / mi)**: which unit you're about to enter the
+  radius in below — it doesn't affect anything else. Every fire's
+  distance is always exposed as both `distance_km` and `distance_mi`
+  attributes no matter what you pick here.
+- **Radius**: only show fires within this distance of the center point,
+  in whichever unit you picked above. Leave at `0` for all active
+  incidents statewide.
 - **Scan interval (minutes)**: how often to poll the feed. CAL FIRE
   doesn't update the underlying data much faster than every 15–30 minutes
   during an active incident, so the default of 10 minutes is reasonable —
   you don't need to go much lower.
 - **Center latitude / longitude**: leave both blank to use your Home
   Assistant instance's configured home location (Settings → System →
-  General) as the center for the radius filter and each fire's
-  `distance_km` attribute. Set both to center on somewhere else instead —
-  useful if your HA server isn't physically where you actually want
-  "nearby" measured from (a vacation property, a family member's house,
-  etc).
-- **Distance unit (km / mi)**: purely a display preference — it doesn't
-  change how the radius filter above is interpreted (that's always
-  kilometers). It controls a convenience pair of attributes,
-  `distance` and `distance_unit`, described below.
+  General) as the center for the radius filter and each fire's distance
+  attributes. Set both to center on somewhere else instead — useful if
+  your HA server isn't physically where you actually want "nearby"
+  measured from (a vacation property, a family member's house, etc).
 
 ### Changing settings later
 
@@ -77,6 +76,12 @@ All of the above can be changed after setup without removing the
 integration: go to **Settings → Devices & Services**, find "CAL FIRE
 Incidents", and click **Configure**. Changes take effect immediately — the
 integration reloads itself automatically, no restart required.
+
+One thing to know: if you switch **Distance unit** later, the **Radius**
+number itself doesn't get converted for you — it's just interpreted in
+the new unit going forward, so re-enter it if you want the same real-world
+distance (e.g. a radius of `50` meant 50 km before switching to miles;
+after switching, that same `50` now means 50 miles, roughly 1.6× larger).
 
 ### Multiple hubs
 
@@ -156,7 +161,7 @@ action:
 
 Available fields on `trigger.event.data`: `unique_id`, `hub`, `name`, `county`,
 `admin_unit`, `incident_type`, `acres_burned`, `percent_contained`,
-`days_burning`, `distance_km`, `distance_mi`, `distance`, `distance_unit`, `url`, `latitude`, `longitude`.
+`days_burning`, `distance_km`, `distance_mi`, `url`, `latitude`, `longitude`.
 
 **Running multiple hubs and only want one to trigger this automation?**
 Both examples above fire for whichever hub the entity_id/event belongs to
@@ -266,14 +271,15 @@ content: >
   | Fire | Distance | Acres | Contained | Days | County |
   | --- | --- | --- | --- | --- | --- |
   {% for st in sorted_rows %}
-  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance }} {{ st.attributes.distance_unit }} | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.days_burning }} | {{ st.attributes.county }} |
+  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance_mi }} mi | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.days_burning }} | {{ st.attributes.county }} |
   {% endfor %}
   {% endif %}
 ```
 
 Add it via **Edit Dashboard → Add Card → Manual**, paste the YAML above,
 and save. It updates automatically as fires appear, disappear, and move
-in distance-sorted order — no manual entity list to maintain.
+in distance-sorted order — no manual entity list to maintain. Prefer
+kilometers? Swap `distance_mi` / `mi` for `distance_km` / `km`.
 
 Running multiple hubs and want this table scoped to just one? Add a
 `hub` check to the `{% if %}` condition, e.g.
@@ -336,7 +342,7 @@ cards:
                 {{ states(config.entity) }} ac •
                 {{ state_attr(config.entity, 'percent_contained') | round(0) }}% contained •
                 {{ state_attr(config.entity, 'days_burning') }}d •
-                {{ state_attr(config.entity, 'distance') }} {{ state_attr(config.entity, 'distance_unit') }} •
+                {{ state_attr(config.entity, 'distance_mi') }} mi •
                 {{ state_attr(config.entity, 'county') }}
               icon: mdi:fire
               icon_color: >-
@@ -397,7 +403,10 @@ A couple of other pieces worth knowing:
   not an OR). Duplicate the whole card, swap in each hub's Name, and
   you'll get a separate "Active Fires" section per location.
 - `sort` orders the generated cards nearest-first by `distance_km`, same
-  as the Markdown table above.
+  as the Markdown table above (sorting stays on `distance_km` regardless
+  of what's displayed in `secondary` — it's just a stable numeric key).
+  The `secondary` text itself shows `distance_mi`; swap in `distance_km`
+  there if you'd rather see kilometers.
 - Icon color is a continuous red → yellow → green gradient as containment
   goes from 0% to 100%, computed as an HSL hue (`hsl(hue, 70%, 45%)`,
   where hue runs from 0° at 0% contained to 120° at 100%) rather than
