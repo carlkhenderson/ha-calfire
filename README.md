@@ -15,8 +15,11 @@ California wildfire incident, pulled from CAL FIRE's incident feed.
 
 Each per-fire entity's state is acres burned, with attributes for county,
 admin unit, incident type, percent contained, start/update timestamps,
-source URL, and latitude/longitude. Because latitude/longitude are exposed
-as attributes, these entities also show up on the built-in Lovelace **Map**
+source URL, latitude/longitude, and distance from your configured center
+point — as `distance_km` and `distance_mi` (always both present), plus a
+`distance` + `distance_unit` pair that reflects your chosen display unit
+(see Configuration below). Because latitude/longitude are exposed as
+attributes, these entities also show up on the built-in Lovelace **Map**
 card.
 
 ## Installation
@@ -56,6 +59,10 @@ During setup (and later — see below) you can optionally set:
   useful if your HA server isn't physically where you actually want
   "nearby" measured from (a vacation property, a family member's house,
   etc).
+- **Distance unit (km / mi)**: purely a display preference — it doesn't
+  change how the radius filter above is interpreted (that's always
+  kilometers). It controls a convenience pair of attributes,
+  `distance` and `distance_unit`, described below.
 
 ### Changing settings later
 
@@ -117,7 +124,7 @@ action:
 
 Available fields on `trigger.event.data`: `unique_id`, `name`, `county`,
 `admin_unit`, `incident_type`, `acres_burned`, `percent_contained`,
-`distance_km`, `url`, `latitude`, `longitude`.
+`distance_km`, `distance_mi`, `distance`, `distance_unit`, `url`, `latitude`, `longitude`.
 
 ## Entity lifecycle
 
@@ -187,7 +194,7 @@ content: >
   | Fire | Distance | Acres | Contained | County |
   | --- | --- | --- | --- | --- |
   {% for st in sorted_rows %}
-  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance_km }} km | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.county }} |
+  | [{{ st.name }}]({{ st.attributes.url }}) | {{ st.attributes.distance }} {{ st.attributes.distance_unit }} | {{ st.state }} ac | {{ st.attributes.percent_contained }}% | {{ st.attributes.county }} |
   {% endfor %}
   {% endif %}
 ```
@@ -196,13 +203,111 @@ Add it via **Edit Dashboard → Add Card → Manual**, paste the YAML above,
 and save. It updates automatically as fires appear, disappear, and move
 in distance-sorted order — no manual entity list to maintain.
 
-If you'd rather have real entity rows (with more-info popups, icons, tap
-actions, etc.) instead of a markdown table, the community
+### One Mushroom card per fire
+
+If you're already using [Mushroom cards](https://github.com/piitaya/lovelace-mushroom)
+and want a proper card per fire (rather than a markdown table), add the
 [auto-entities](https://github.com/thomasloven/lovelace-auto-entities)
-custom card (installable via HACS as a *frontend* repository, separate
-from this integration) supports the same "filter by integration, sort by
-attribute" idea natively — worth a look if the table above feels too
-plain, but it's an extra dependency this integration doesn't require.
+custom card too (both via HACS → Frontend). `auto-entities` can generate a
+full card per matched entity — using `card_param: cards` — rather than
+just filling in a list, which is what makes this possible without
+manually adding/removing a card every time a fire starts or closes out.
+
+Making the card *tappable to open that fire's CAL FIRE page* needs one
+more custom card:
+[config-template-card](https://github.com/iantrich/config-template-card)
+(HACS → Frontend). Here's why it's necessary: `auto-entities` only
+performs one narrow substitution — the literal string `this.entity_id`,
+wherever a field's value is exactly that, gets replaced with the matched
+entity_id. It doesn't understand anything like `this.attributes.url`.
+Mushroom's own live Jinja templating (used above for `primary`,
+`secondary`, `icon_color`, etc.) doesn't extend to `tap_action` either —
+that's a fixed config, not something Mushroom re-templates per entity.
+`config-template-card` closes that gap: it evaluates JS template
+expressions (`${ ... }`) anywhere in a nested card's config, including
+inside `tap_action`, using the real entity_id that `auto-entities` already
+substituted in:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: custom:mushroom-title-card
+    title: Active Fires
+    subtitle: Sorted by distance from center point
+  - type: custom:auto-entities
+    show_empty: true
+    card:
+      type: grid
+      columns: 1
+      square: false
+    card_param: cards
+    filter:
+      include:
+        - integration: calfire
+          options:
+            type: custom:config-template-card
+            entities:
+              - this.entity_id
+            card:
+              type: custom:mushroom-template-card
+              entity: this.entity_id
+              primary: "{{ state_attr(config.entity, 'friendly_name') }}"
+              secondary: >-
+                {{ states(config.entity) }} ac •
+                {{ state_attr(config.entity, 'percent_contained') | round(0) }}% contained •
+                {{ state_attr(config.entity, 'distance') }} {{ state_attr(config.entity, 'distance_unit') }} •
+                {{ state_attr(config.entity, 'county') }}
+              icon: mdi:fire
+              icon_color: >-
+                {% set pc = state_attr(config.entity, 'percent_contained') | float(0) %}
+                {% if pc >= 100 %}green
+                {% elif pc >= 50 %}amber
+                {% else %}red
+                {% endif %}
+              tap_action:
+                action: url
+                url_path: ${ states[this._config.entities[0]].attributes.url }
+      exclude:
+        - name: "Latest Incident"
+    sort:
+      method: attribute
+      attribute: distance_km
+      numeric: true
+```
+
+How the entity actually gets to `tap_action` here, in order:
+1. `auto-entities` matches each fire and replaces the literal value
+   `this.entity_id` wherever it appears — including inside
+   `config-template-card`'s own `entities:` list — with that fire's real
+   entity_id.
+2. `config-template-card` then has a concrete entity_id baked into its own
+   config at `this._config.entities[0]`, and evaluates the `${ ... }` JS
+   expression in `tap_action.url_path` using it — `states[...]` here is
+   `config-template-card`'s own JS state lookup, not Home Assistant's
+   Jinja `states()` function used elsewhere in this card.
+3. Everything inside the nested `mushroom-template-card` (`primary`,
+   `secondary`, `icon_color`) still uses ordinary Jinja via
+   `config.entity`, exactly as before — that part didn't need to change.
+
+If adding a third custom card just for tap-to-open feels like too much,
+the Markdown card option above already handles per-fire links correctly
+with zero extra dependencies (Markdown's own link rendering resolves
+templated URLs fine, unlike Mushroom's `tap_action`).
+
+A couple of other pieces worth knowing:
+- `filter.include: [{integration: calfire}]` picks up every entity this
+  integration creates, automatically — new fires get a card without
+  touching the dashboard, closed-out fires lose theirs the moment their
+  entity is removed.
+- `exclude: [{name: "Latest Incident"}]` excludes the
+  `sensor.calfire_latest_incident` singleton, so only real per-fire cards
+  show up here.
+- `sort` orders the generated cards nearest-first by `distance_km`, same
+  as the Markdown table above.
+- Icon color shifts red → amber → green as containment increases — tweak
+  the thresholds in `icon_color` to taste, or swap in different Mushroom
+  card fields (e.g. `secondary` wording, adding a `badge_icon` for
+  `is_active`, etc).
 
 ## Notes
 
