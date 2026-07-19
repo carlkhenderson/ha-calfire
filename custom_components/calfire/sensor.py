@@ -90,6 +90,7 @@ async def async_setup_entry(
                         "calfire_new_incident",
                         {
                             "unique_id": unique_id,
+                            "hub": incident["hub"],
                             "name": incident["name"],
                             "county": incident["county"],
                             "admin_unit": incident["admin_unit"],
@@ -130,7 +131,7 @@ async def async_setup_entry(
                 for unique_id in coordinator.removed_ids:
                     known_ids.discard(unique_id)
                     entity_id = ent_reg.async_get_entity_id(
-                        "sensor", DOMAIN, f"calfire_{unique_id}"
+                        "sensor", DOMAIN, f"calfire_{coordinator.entry_id}_{unique_id}"
                     )
                     if entity_id:
                         _LOGGER.debug(
@@ -139,7 +140,8 @@ async def async_setup_entry(
                         ent_reg.async_remove(entity_id)
                     else:
                         _LOGGER.warning(
-                            "Could not find a registered entity for calfire_%s to remove",
+                            "Could not find a registered entity for calfire_%s_%s to remove",
+                            coordinator.entry_id,
                             unique_id,
                         )
         except Exception:  # noqa: BLE001 - log instead of silently losing
@@ -176,18 +178,43 @@ class CalFireIncidentSensor(CoordinatorEntity, SensorEntity):
         self._incident_id = unique_id
         # Home Assistant uses `unique_id` (not entity_id or name) as the
         # permanent, stable identifier for an entity across restarts and
-        # renames. Prefixed with "calfire_" to keep it clearly namespaced.
-        self._attr_unique_id = f"calfire_{unique_id}"
+        # renames. Scoped to this coordinator's config entry
+        # (`calfire_<entry_id>_<fire_id>`), not just the fire's own ID —
+        # if you run two hub instances (e.g. one centered on your home,
+        # one on a relative's) with overlapping radii, the same fire could
+        # otherwise collide across both, since unique_ids must be unique
+        # per integration domain, not just per config entry.
+        self._attr_unique_id = f"calfire_{coordinator.entry_id}_{unique_id}"
+        # The most recent incident data seen for this fire, kept around so
+        # attributes don't go completely blank the moment this fire briefly
+        # drops out of the feed (see `_incident`'s docstring below).
+        self._last_known: dict | None = coordinator.data.get(unique_id)
 
     @property
     def _incident(self) -> dict | None:
-        """Look up this fire's current details from the coordinator.
+        """This fire's details — current if available, else the last-known copy.
 
-        Returns None if this fire is no longer in `coordinator.data` (i.e.
-        it's dropped out of the feed but hasn't yet hit the "missing long
-        enough to remove" threshold — see `available` below).
+        A fire missing from `coordinator.data` might just be within its
+        removal grace period (see MISSING_POLLS_BEFORE_REMOVAL in
+        const.py) rather than actually gone yet. Previously, this returned
+        None the moment a fire went missing, which made `extra_state_
+        attributes` return `{}` — wiping out `distance_km` and every other
+        attribute instantly, even though the entity was still fully
+        registered. That broke dashboard cards (like the auto-entities
+        example in the README) that sort or filter on those attributes:
+        an entity with a *missing* attribute can behave differently from
+        one with a stale-but-present value, including silently vanishing
+        from a sorted list. Falling back to the last-known snapshot avoids
+        that — the entity still correctly reports `unavailable` (see
+        `available` below) during the grace period, but its attributes
+        stay populated with its last known values instead of disappearing,
+        right up until the entity is actually removed.
         """
-        return self.coordinator.data.get(self._incident_id)
+        current = self.coordinator.data.get(self._incident_id)
+        if current is not None:
+            self._last_known = current
+            return current
+        return self._last_known
 
     @property
     def available(self) -> bool:
@@ -195,13 +222,16 @@ class CalFireIncidentSensor(CoordinatorEntity, SensorEntity):
 
         `super().available` covers the coordinator-level checks (e.g. "did
         the last fetch fail entirely?"). We additionally require that this
-        specific fire still be present in the latest data — if it's
-        temporarily missing (within its grace period), the entity shows as
-        "unavailable" rather than displaying stale numbers. If it's missing
-        for long enough, sensor setup's `_handle_update` above removes the
-        entity outright instead of leaving it unavailable forever.
+        specific fire still be present in the *current* poll's data — note
+        this deliberately checks `coordinator.data` directly rather than
+        `self._incident` (which may fall back to a cached value), so the
+        entity still correctly shows as unavailable during the grace
+        period even though its attributes remain populated. If it's
+        missing for long enough, sensor setup's `_handle_update` above
+        removes the entity outright instead of leaving it unavailable
+        forever.
         """
-        return super().available and self._incident is not None
+        return super().available and self.coordinator.data.get(self._incident_id) is not None
 
     @property
     def name(self) -> str:
@@ -226,6 +256,7 @@ class CalFireIncidentSensor(CoordinatorEntity, SensorEntity):
         if not incident:
             return {}
         return {
+            "hub": incident["hub"],
             "county": incident["county"],
             "admin_unit": incident["admin_unit"],
             "incident_type": incident["incident_type"],
@@ -283,6 +314,7 @@ class CalFireLatestIncidentSensor(CoordinatorEntity, SensorEntity):
         if not incident:
             return {}
         return {
+            "hub": incident["hub"],
             "county": incident["county"],
             "admin_unit": incident["admin_unit"],
             "incident_type": incident["incident_type"],

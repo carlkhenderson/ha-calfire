@@ -24,9 +24,11 @@ from .const import (
     CONF_CENTER_LATITUDE,
     CONF_CENTER_LONGITUDE,
     CONF_DISTANCE_UNIT,
+    CONF_NAME,
     CONF_RADIUS_KM,
     CONF_SCAN_INTERVAL_MINUTES,
     DEFAULT_DISTANCE_UNIT,
+    DEFAULT_NAME,
     DEFAULT_RADIUS_KM,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
@@ -48,6 +50,9 @@ def _schema(current: dict) -> vol.Schema:
     """
     return vol.Schema(
         {
+            vol.Optional(
+                CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)
+            ): str,
             vol.Optional(
                 CONF_RADIUS_KM, default=current.get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)
             ): vol.Coerce(float),
@@ -110,8 +115,13 @@ class CalFireConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # The user has submitted the form (and voluptuous has already
             # validated/coerced it against the schema). Create the actual
             # config entry — this is what triggers __init__.py's
-            # `async_setup_entry` to run.
-            return self.async_create_entry(title="CAL FIRE Incidents", data=user_input)
+            # `async_setup_entry` to run. Using their chosen name as the
+            # entry's title (rather than a fixed string) is what lets
+            # multiple instances of this integration — e.g. one per
+            # location you want to track fires near — show up as
+            # distinguishable entries in Settings -> Devices & Services.
+            name = user_input.get(CONF_NAME) or DEFAULT_NAME
+            return self.async_create_entry(title=name, data=user_input)
 
         # First time through: show the form and wait for submission.
         return self.async_show_form(step_id="user", data_schema=_schema({}))
@@ -144,7 +154,16 @@ class CalFireOptionsFlow(config_entries.OptionsFlow):
             # rather than `entry.data` (which holds the *initial* setup
             # values) — see __init__.py for how the two are merged when
             # read back. Passing title="" here is normal/expected for an
-            # options flow; only the initial config flow sets a real title.
+            # options flow; only the initial config flow sets a real title
+            # for the entry *creation* itself. Renaming an *existing*
+            # entry (e.g. if the name field changed) needs a separate,
+            # explicit call, since options-flow saves don't touch the
+            # title on their own.
+            new_name = user_input.get(CONF_NAME) or DEFAULT_NAME
+            if new_name != self.config_entry.title:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, title=new_name
+                )
             return self.async_create_entry(title="", data=user_input)
 
         # Show whatever's already configured, checking options first (a

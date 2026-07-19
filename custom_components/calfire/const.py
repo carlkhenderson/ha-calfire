@@ -10,6 +10,13 @@ and is a standard Home Assistant integration convention.
 # prefixes, and registering the config flow.
 DOMAIN = "calfire"
 
+# A user-editable display name, so multiple instances of this integration
+# (e.g. one centered on your home, one on a relative's) can be told apart
+# in Settings -> Devices & Services, and so fire entities can carry which
+# hub they came from as an attribute for dashboard filtering.
+CONF_NAME = "name"
+DEFAULT_NAME = "CAL FIRE Incidents"
+
 # CAL FIRE's own internal API endpoint (built for their website, not for
 # third-party use) that returns currently-active incidents as GeoJSON.
 API_URL = "https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?inactive=false"

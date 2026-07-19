@@ -174,12 +174,25 @@ class CalFireCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
+        entry_id: str,
+        hub_name: str,
         radius_km: float,
         scan_minutes: int,
         center_lat: float | None = None,
         center_lon: float | None = None,
         distance_unit: str = DEFAULT_DISTANCE_UNIT,
     ) -> None:
+        # Which config entry (integration instance) this coordinator
+        # belongs to, and its display name. Having more than one hub set
+        # up (e.g. one centered on your home, one on a relative's) is
+        # fully supported — these two let per-fire entities be scoped and
+        # labeled per hub, so two hubs' fires never collide with the same
+        # unique_id even if their radii overlap (see CalFireIncidentSensor
+        # in sensor.py), and so a "hub" attribute can be used to filter a
+        # dashboard down to just one hub's fires.
+        self.entry_id = entry_id
+        self.hub_name = hub_name
+
         # Optional filter: if > 0, incidents farther than this from the
         # center point are dropped entirely (never become entities). 0
         # means "no filtering". Always interpreted in kilometers regardless
@@ -383,6 +396,7 @@ class CalFireCoordinator(DataUpdateCoordinator):
                     else None
                 ),
                 "distance_unit": self.distance_unit,
+                "hub": self.hub_name,
             }
 
         # --- Step 3: work out which fires are brand new since last poll ---
@@ -470,7 +484,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     distance_unit = _get(CONF_DISTANCE_UNIT, DEFAULT_DISTANCE_UNIT)
 
     coordinator = CalFireCoordinator(
-        hass, radius_km, scan_minutes, center_lat, center_lon, distance_unit
+        hass,
+        entry.entry_id,
+        entry.title,
+        radius_km,
+        scan_minutes,
+        center_lat,
+        center_lon,
+        distance_unit,
     )
 
     # If this integration was previously set up (and is now reloading, or
@@ -480,16 +501,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # so leftover entities for fires that closed out while HA was down get
     # properly evaluated for removal instead of being invisible to that
     # logic forever (see `seed_known_ids`'s docstring for why this matters).
-    unique_id_prefix = f"{DOMAIN}_"
+    #
+    # Per-fire unique_ids are scoped to this specific config entry
+    # (`calfire_<entry_id>_<fire_id>`) so that two hub instances (e.g. one
+    # centered on your home, one on a relative's) never collide over the
+    # same fire, even if their radii overlap. Versions of this integration
+    # before multi-hub support used an unscoped format
+    # (`calfire_<fire_id>`) — rather than orphaning those entities, we
+    # migrate them to the new format in place here, which preserves their
+    # entity_id, history, and any dashboard/automation references.
     latest_incident_suffix = "_latest_incident"
+    old_unique_id_prefix = f"{DOMAIN}_"
+    new_unique_id_prefix = f"{DOMAIN}_{entry.entry_id}_"
     ent_reg = async_get_entity_registry(hass)
-    leftover_fire_ids = {
-        registry_entry.unique_id[len(unique_id_prefix) :]
-        for registry_entry in async_entries_for_config_entry(ent_reg, entry.entry_id)
-        if registry_entry.domain == "sensor"
-        and registry_entry.unique_id.startswith(unique_id_prefix)
-        and not registry_entry.unique_id.endswith(latest_incident_suffix)
-    }
+    leftover_fire_ids: set[str] = set()
+    for registry_entry in async_entries_for_config_entry(ent_reg, entry.entry_id):
+        if registry_entry.domain != "sensor":
+            continue
+        uid = registry_entry.unique_id
+        if uid.endswith(latest_incident_suffix):
+            continue  # the singleton entity, already entry-scoped, nothing to migrate
+        if uid.startswith(new_unique_id_prefix):
+            leftover_fire_ids.add(uid[len(new_unique_id_prefix) :])
+        elif uid.startswith(old_unique_id_prefix):
+            fire_id = uid[len(old_unique_id_prefix) :]
+            ent_reg.async_update_entity(
+                registry_entry.entity_id,
+                new_unique_id=f"{new_unique_id_prefix}{fire_id}",
+            )
+            leftover_fire_ids.add(fire_id)
     coordinator.seed_known_ids(leftover_fire_ids)
 
     # Do one fetch right now (rather than waiting for the first timer tick)
