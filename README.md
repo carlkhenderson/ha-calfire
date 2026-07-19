@@ -298,17 +298,19 @@ performs one narrow substitution — the literal string `this.entity_id`,
 wherever a field's value is exactly that, gets replaced with the matched
 entity_id. It doesn't understand anything like `this.attributes.url`.
 Mushroom's own live Jinja templating (used above for `primary`,
-`secondary`, `icon_color`, etc.) doesn't extend to `tap_action` either —
+`secondary`, `picture`, etc.) doesn't extend to `tap_action` either —
 that's a fixed config, not something Mushroom re-templates per entity.
 `config-template-card` closes that gap: it evaluates JS template
 expressions (`${ ... }`) anywhere in a nested card's config, including
 inside `tap_action`, using the real entity_id that `auto-entities` already
 substituted in.
 
-Want the icon itself to show containment as a filling pie/radial shape
-(rather than just a color shift)? Add one more card:
-[card-mod](https://github.com/thomasloven/lovelace-card-mod) (HACS →
-Frontend). It's included in the card below already:
+Want containment shown as a smooth, continuous pie fill rather than a
+color shift? Mushroom's `picture` field can render a raw inline SVG data
+URI, so a pie wedge can be drawn directly with plain math — no extra
+custom card needed beyond what's above. The angle is computed with Home
+Assistant's built-in `sin`/`cos`/`pi` template functions (`pi` is a bare
+constant, `sin(...)`/`cos(...)` are functions taking radians):
 
 ```yaml
 type: vertical-stack
@@ -341,25 +343,27 @@ cards:
                 {{ state_attr(config.entity, 'days_burning') }}d •
                 {{ state_attr(config.entity, 'distance_mi') }} mi •
                 {{ state_attr(config.entity, 'county') }}
-              icon: mdi:fire
-              icon_color: >-
+              picture: >-
                 {% set pc = state_attr(config.entity, 'percent_contained') | float(0) %}
                 {% set pc = [[pc, 0] | max, 100] | min %}
-                hsl({{ (pc * 1.2) | round(0) }}, 70%, 45%)
+                {% set hue = (pc * 1.2) | round(0) | int %}
+                {% set angle = pc / 100 * 360 %}
+                {% set rad = angle * pi / 180 %}
+                {% set x = (12 + 10 * sin(rad)) | round(2) %}
+                {% set y = (12 - 10 * cos(rad)) | round(2) %}
+                {% set large_arc = 1 if angle > 180 else 0 %}
+                {% set fill = 'hsl(' ~ hue ~ ',70%25,45%25)' %}
+                {% if pc <= 0 %}
+                {% set wedge = '' %}
+                {% elif pc >= 100 %}
+                {% set wedge = "<circle cx='12' cy='12' r='10' fill='" ~ fill ~ "'/>" %}
+                {% else %}
+                {% set wedge = "<path d='M12,12 L12,2 A10,10 0 " ~ large_arc ~ ",1 " ~ x ~ "," ~ y ~ " Z' fill='" ~ fill ~ "'/>" %}
+                {% endif %}
+                data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='none' stroke='%23444' stroke-width='0.5'/>{{ wedge }}</svg>
               tap_action:
                 action: url
                 url_path: ${ states[this._config.entities[0]].attributes.url }
-              card_mod:
-                style:
-                  mushroom-shape-icon$: |
-                    {% set pc = state_attr(config.entity, 'percent_contained') | float(0) %}
-                    {% set pc = [[pc, 0] | max, 100] | min %}
-                    .shape {
-                      background: conic-gradient(
-                        hsl({{ (pc * 1.2) | round(0) }}, 70%, 45%) 0% {{ pc }}%,
-                        var(--card-background-color) {{ pc }}% 100%
-                      );
-                    }
     sort:
       method: attribute
       attribute: distance_km
@@ -377,8 +381,8 @@ How the entity actually gets to `tap_action` here, in order:
    `config-template-card`'s own JS state lookup, not Home Assistant's
    Jinja `states()` function used elsewhere in this card.
 3. Everything inside the nested `mushroom-template-card` (`primary`,
-   `secondary`, `icon_color`) still uses ordinary Jinja via
-   `config.entity`, exactly as before — that part didn't need to change.
+   `secondary`, `picture`) still uses ordinary Jinja via `config.entity`,
+   exactly as before — that part didn't need to change.
 
 If adding a third custom card just for tap-to-open feels like too much,
 the Markdown card option above already handles per-fire links correctly
@@ -415,23 +419,17 @@ A couple of other pieces worth knowing:
   of what's displayed in `secondary` — it's just a stable numeric key).
   The `secondary` text itself shows `distance_mi`; swap in `distance_km`
   there if you'd rather see kilometers.
-- Icon color is a continuous red → yellow → green gradient as containment
-  goes from 0% to 100%, computed as an HSL hue (`hsl(hue, 70%, 45%)`,
-  where hue runs from 0° at 0% contained to 120° at 100%) rather than
-  fixed color buckets. Tweak the `70%`/`45%` saturation/lightness values,
-  the `1.2` multiplier (hue range), or swap in different Mushroom card
-  fields (e.g. `secondary` wording, adding a `badge_icon` for
-  `days_burning`, etc).
-- `card_mod` makes the icon's circular background itself fill up like a
-  pie chart as containment increases, using a CSS `conic-gradient`: filled
-  from 0% up to `percent_contained`, background color the rest of the way
-  around. `mushroom-shape-icon$:` is card-mod's syntax for reaching into
-  that specific child element's internal styling (the `$` pierces its
-  shadow DOM); `.shape` is the circular element behind the flame icon
-  whose `background` this replaces. The fill color reuses the same hue
-  calculation as `icon_color` above, so color and fill both track
-  containment — drop the `card_mod` block entirely if that feels like
-  redundant visual noise rather than reinforcement.
+- `picture` replaces the icon with an inline SVG pie wedge, redrawn every
+  update: an outlined circle as a backdrop, plus a filled wedge from 0% to
+  `percent_contained` (a full circle at 100%, nothing but the outline at
+  0%). The wedge's endpoint is computed with Home Assistant's built-in
+  `sin`/`cos`/`pi` template functions — converting `percent_contained` to
+  an angle, then to an (x, y) point on the circle — and its fill color
+  reuses the same red→green HSL hue as before. `%25` and `%23` are
+  percent-encoded `%` and `#`, needed since the SVG is embedded directly
+  in a `data:` URI rather than a separate file. Tweak the `r='10'`/
+  `viewBox` values to resize, or the `70%25,45%25` saturation/lightness
+  for a different color intensity.
 
 ## Notes
 
